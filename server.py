@@ -10,6 +10,7 @@ import PIL.Image
 import http.server
 import socketserver
 import socket
+import io
 import os
 import sys
 import time
@@ -21,7 +22,6 @@ except ImportError:
 
 HOST = [(s.connect(('8.8.8.8', 53)), s.getsockname()[0], s.close()) for s in [socket.socket(socket.AF_INET, socket.SOCK_DGRAM)]][0][1]
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5900
-FILENAME = '/dev/shm/frame.png'
 ROTATE = True
 GRAYSCALE = True
 BB = (0, 0, 700, 600)
@@ -62,24 +62,27 @@ class VNCServer(http.server.SimpleHTTPRequestHandler):
                 unchanged += 1
         lastimg = img.tobytes()
         t2 = time.time()
-        img.save(FILENAME, compress_level=1)
+        png = io.BytesIO()
+        img.save(png, format="png", compress_level=1)
         t3 = time.time()
         if TIMING:
             print("getFrame", t1 - t0, t2 - t1, t3 - t2)
+        return png
 
     def do_GET(self):
         self.path = self.path.split('?')[0]
         if self.path == '/frame.png':
             t0 = time.time()
-            self.getFrame()
+            frame = self.getFrame()
             t1 = time.time()
-            with open(FILENAME, 'rb') as frame:
-                self.send_response(200)
-                self.send_header('Content-Type', 'image/png')
-                self.end_headers()
-                t2 = time.time()
-                self.wfile.write(frame.read())
-                t3 = time.time()
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/png')
+            self.end_headers()
+            t2 = time.time()
+            frame.seek(0)
+            self.wfile.write(frame.read())
+            frame.close()
+            t3 = time.time()
             if TIMING:
                 print("do_GET", t1 - t0, t2 - t1, t3 - t2)
         elif self.path == "/":
