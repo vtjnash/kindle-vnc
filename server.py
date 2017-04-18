@@ -16,7 +16,10 @@ import sys
 import time
 try:
     import PIL.ImageGrab
+    import PIL.ImageDraw
+    import AppKit
 except ImportError:
+    # import pyscreenshot as PIL.ImageGrab
     PIL.ImageGrab = None
     pass
 
@@ -49,6 +52,15 @@ class VNCServer(http.server.SimpleHTTPRequestHandler):
                 img = PIL.Image.merge("RGB", (r, g, b))
             else:
                 img = PIL.ImageGrab.grab(BB)
+                #x, y = win32gui.GetCursorPos(point)
+                pos = AppKit.NSEvent.mouseLocation()
+                x = pos.x
+                y = AppKit.NSScreen.mainScreen().frame().size.height - pos.y
+                draw = PIL.ImageDraw.Draw(img)
+                SIZE = 2
+                draw.arc((x - SIZE, y - SIZE, x + SIZE, y + SIZE), start=0, end=360, fill="white")
+                draw.arc((x - SIZE * 0.6, y - SIZE * 0.6, x + SIZE * 0.6, y + SIZE * 0.6), start=0, end=360, fill="black")
+                del draw
             if GRAYSCALE:
                 img = img.convert("L")
                 #img = img.convert("P", palette="ADAPTIVE", colors=2)
