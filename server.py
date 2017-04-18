@@ -6,60 +6,94 @@ Kindle VNC Server 1.0
 Apache 2.0 License
 """
 
-import SimpleHTTPServer
-import SocketServer
+import PIL.Image
+import http.server
+import socketserver
 import socket
 import os
-import wx
+import sys
+import time
+try:
+    import PIL.ImageGrab
+except ImportError:
+    PIL.ImageGrab = None
+    pass
 
 HOST = [(s.connect(('8.8.8.8', 53)), s.getsockname()[0], s.close()) for s in [socket.socket(socket.AF_INET, socket.SOCK_DGRAM)]][0][1]
-PORT = 5900
-FILENAME = '/dev/shm/frame.jpg'
-QUALITY = 50
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 5900
+FILENAME = '/dev/shm/frame.png'
 ROTATE = True
 GRAYSCALE = True
-OPTIMIZE = True
-W = 700
-H = 600
-X = 0
-Y = 0
+BB = (0, 0, 700, 600)
+SCR_WIDTH = 1280
+SCR_HEIGHT = 1024
+TIMING = False
 
-class VNCServer(SimpleHTTPServer.SimpleHTTPRequestHandler):
+lastimg = None
+class VNCServer(http.server.SimpleHTTPRequestHandler):
     def getFrame(self):
-        app = wx.PySimpleApp()
-        bmp = wx.EmptyBitmap(W, H, -1)
-        mem = wx.MemoryDC()
-        mem.SelectObject(bmp)
-        mem.Blit(0, 0, W, H, wx.ScreenDC(), X, Y)
-        mem.SelectObject(wx.NullBitmap)
-        img = wx.ImageFromBitmap(bmp)
-        if GRAYSCALE:
-            img = img.ConvertToGreyscale()
-        if ROTATE:
-            img = img.Rotate90()
-        img.SetOptionInt(wx.IMAGE_OPTION_QUALITY, QUALITY)
-        img.SaveFile(FILENAME, wx.BITMAP_TYPE_JPEG)
-        if OPTIMIZE:
-            os.system('jpegtran -optimize -progressive ' + ('', '-grayscale ')[GRAYSCALE] + '-copy none -outfile ' + FILENAME + ' ' + FILENAME)
+        t0 = time.time()
+        global lastimg
+        if PIL.ImageGrab == None:
+            screen = open("/dev/fb0", "rb")
+        img = None
+        unchanged = 0
+        t1 = time.time()
+        while img == None:
+            if PIL.ImageGrab == None:
+                screen.seek(0)
+                data = screen.read(SCR_WIDTH * SCR_HEIGHT * 4)
+                img = PIL.Image.frombuffer("RGBX", (SCR_WIDTH, SCR_HEIGHT), data, "raw", "RGBX", 0, 1)
+                img = img.crop(BB)
+                b, g, r, a = img.split() # reorder the colors
+                img = PIL.Image.merge("RGB", (r, g, b))
+            else:
+                img = PIL.ImageGrab.grab(BB)
+            if GRAYSCALE:
+                img = img.convert("L")
+                #img = img.convert("P", palette="ADAPTIVE", colors=2)
+            else: # PNG wants RBG mode color
+                img = img.convert("RGB")
+            if ROTATE:
+                img = img.transpose(PIL.Image.ROTATE_90)
+            if img.tobytes() == lastimg:
+                img = None
+                time.sleep(0.05)
+                unchanged += 1
+        lastimg = img.tobytes()
+        t2 = time.time()
+        img.save(FILENAME, compress_level=1)
+        t3 = time.time()
+        if TIMING:
+            print("getFrame", t1 - t0, t2 - t1, t3 - t2)
+
     def do_GET(self):
         self.path = self.path.split('?')[0]
-        if self.path == '/frame.jpg':
+        if self.path == '/frame.png':
+            t0 = time.time()
             self.getFrame()
+            t1 = time.time()
             with open(FILENAME, 'rb') as frame:
                 self.send_response(200)
-                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Type', 'image/png')
                 self.end_headers()
+                t2 = time.time()
                 self.wfile.write(frame.read())
+                t3 = time.time()
+            if TIMING:
+                print("do_GET", t1 - t0, t2 - t1, t3 - t2)
+        elif self.path == "/":
+            http.server.SimpleHTTPRequestHandler.do_GET(self)
         else:
-            SimpleHTTPServer.SimpleHTTPRequestHandler.do_GET(self)
+            self.send_response(404)
 
 if __name__ == '__main__':
-    httpd = SocketServer.TCPServer((HOST, PORT), VNCServer)
+    httpd = socketserver.TCPServer((HOST, PORT), VNCServer)
     httpd.allow_reuse_address = True
-    print 'Kindle VNC Server started at http://%s:%s' % (HOST, PORT)
+    print('Kindle VNC Server started at http://%s:%s' % (HOST, PORT))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
        pass
     httpd.server_close()
-    print 'Server stopped'
+    print('Server stopped')
